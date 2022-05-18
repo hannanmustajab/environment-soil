@@ -22,10 +22,11 @@
 
 // v1.00- ENV Code as starting point. 
 // v1.01 - Added soil moisture sensor
+// v1.2 - Added second soil moisture sensor to the board. 
 
 
 
-#define SOFTWARERELEASENUMBER "1.01"                                                        // Keep track of release numbers
+#define SOFTWARERELEASENUMBER "1.2"                                                        // Keep track of release numbers
 
 // Included Libraries
 #include "math.h"
@@ -74,6 +75,8 @@ struct sensor_data_struct {                                                     
   int stateOfCharge;
   int powerSource;
   int soilMoisture; 
+  int soilMoisture2;
+
 } sensor_data;
 
 // Prototypes and System Mode calls
@@ -100,7 +103,8 @@ State oldState = INITIALIZATION_STATE;
 const int wakeUpPin = D8;                                                                   // This is the Particle Electron WKP pin
 const int donePin = D5;
 const int userSwitch =    D4;                                                               // User switch with a pull-up resistor
-const int soilPin =      A0;                                                               //  Soil Sensor
+const int soilPin =      A0;                                                                //  Soil Sensor
+const int soilPin2 =      A1;                                                               // Second Soil Sensor
 
 
 volatile bool watchdogFlag=false;                                                           // Flag to let us know we need to pet the dog
@@ -207,12 +211,6 @@ void setup()                                                                    
   veml.setGain(VEML7700_GAIN_1/8); 
   veml.setIntegrationTime(VEML7700_IT_25MS);
 
-  // veml.getGain();
-
-  // veml.getIntegrationTime();
- 
-  // veml.setLowThreshold(10);
-  // veml.setHighThreshold(200000);
   veml.interruptEnable(true);
 
   // Load FRAM and reset variables to their correct values
@@ -249,6 +247,8 @@ void setup()                                                                    
   if (!digitalRead(userSwitch)) loadSystemDefaults();                                       // Make sure the device wakes up and connects
   
   takeMeasurements();                                                                       // For the benefit of monitoring the device
+  
+  if (sysStatus.lowBatteryMode) setLowPowerMode("1");                                       // If battery is low we need to go to low power state
 
   if(sysStatus.verboseMode) publishQueue.publish("Startup",StartupMessage,PRIVATE);                       // Let Particle know how the startup process went
 
@@ -263,7 +263,7 @@ void loop()
   case IDLE_STATE:
     if (sysStatus.verboseMode && state != oldState) publishStateTransition();
     if (sysStatus.lowPowerMode && (millis() - stayAwakeTimeStamp) > stayAwake) state = NAPPING_STATE; 
-    if (sysStatus.lowBatteryMode) state = SLEEPING_STATE;                                 // If in low power mode, Goto sleep.
+    // if (sysStatus.lowBatteryMode) state = SLEEPING_STATE;                                 // If in low power mode, Goto sleep.
     if (!(Time.now() % wakeBoundary)) state = MEASURING_STATE;  
     
     break;
@@ -349,6 +349,7 @@ void loop()
         .gpio(userSwitch,CHANGE)
         .duration(wakeInSeconds*1000);
         System.sleep(config);
+
       SystemSleepResult result = System.sleep(config);                   // Put the device to sleep device reboots from here   
       if (result.wakeupPin() == userSwitch) {                            // If the user woke the device we need to get up
         setLowPowerMode("0");
@@ -406,7 +407,7 @@ void petWatchdog()
 void sendEvent()
 {
   char data[128];                   
-  snprintf(data, sizeof(data), "{\"temperature\":%4.1f,  \"humidity\":%4.1f,  \"Soilmoisture\":%i,  \"lux\":%4.1f,  \"white\":%4.1f,  \"als\":%4.1f,\"battery\":%i}", sensor_data.temperatureInC, sensor_data.relativeHumidity,sensor_data.soilMoisture,sensor_data.lux,sensor_data.white,sensor_data.raw_als,sensor_data.stateOfCharge);
+  snprintf(data, sizeof(data), "{\"temperature\":%4.1f,  \"humidity\":%4.1f,  \"Soilmoisture\":%i,  \"Soilmoisture2\":%i,  \"lux\":%4.1f,  \"white\":%4.1f,  \"als\":%4.1f,\"battery\":%i}", sensor_data.temperatureInC, sensor_data.relativeHumidity,sensor_data.soilMoisture, sensor_data.soilMoisture2 ,sensor_data.lux,sensor_data.white,sensor_data.raw_als,sensor_data.stateOfCharge);
   publishQueue.publish("environmental-hook", data, PRIVATE);
   dataInFlight = true;                                                                      // set the data inflight flag
   webhookTimeStamp = millis();
@@ -433,8 +434,6 @@ void UbidotsHandler(const char *event, const char *data) {            // Looks a
 // These are the functions that are part of the takeMeasurements call
 
 bool takeMeasurements() {
-
-  // bme.setGasHeater(320, 150);                                                                 // 320*C for 150 ms
   
   sensor_data.validData = false;
 
@@ -453,6 +452,13 @@ bool takeMeasurements() {
     sensor_data.white = veml.readWhite();
     sensor_data.raw_als = veml.readALS();
 
+    // Read soil moisture 
+    sensor_data.soilMoisture = map(analogRead(soilPin),0,3722,0,100);             // Sensor puts out 0-3V for 0% to 100% soil moisuture
+
+    // Read soil moisture 
+    sensor_data.soilMoisture2 = map(analogRead(soilPin2),0,3722,0,100);             // Sensor puts out 0-3V for 0% to 100% soil moisuture
+
+
     snprintf(luxString,sizeof(luxString),"Lux : %4.1f", sensor_data.lux);
     snprintf(whiteString,sizeof(whiteString),"White : %4.1f", sensor_data.white);
     snprintf(ALSString,sizeof(ALSString),"ALS : %4.1f", sensor_data.raw_als);
@@ -463,11 +469,11 @@ bool takeMeasurements() {
     getBatteryContext();                   // Check what the battery is doing.
 
     sysStatus.stateOfCharge = int(System.batteryCharge());              // Percentage of full charge
-    if (sysStatus.stateOfCharge < 30) sysStatus.lowBatteryMode = true;  // Check to see if we are in low battery territory
+    if (sysStatus.stateOfCharge < 30) {
+      sysStatus.lowBatteryMode = true;
+      if (!sysStatus.lowPowerMode) setLowPowerMode("1");                 // Should be there already but just in case...
+      }  // Check to see if we are in low battery territory
     else sysStatus.lowBatteryMode = false;                              // We have sufficient to continue operations
-
-  // Read soil moisture 
-    sensor_data.soilMoisture = map(analogRead(soilPin),0,3722,0,100);             // Sensor puts out 0-3V for 0% to 100% soil moisuture
 
     // Indicate that this is a valid data array and store it
     sensor_data.validData = true;
