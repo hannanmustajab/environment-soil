@@ -22,11 +22,12 @@
 
 // v1.00- ENV Code as starting point. 
 // v1.01 - Added soil moisture sensor
-// v1.2 - Added second soil moisture sensor to the board. 
+// v1.20 - Added second soil moisture sensor to the board. 
+// v1.21 - Fixed issue with the size of the data payload. 
 
 
 
-#define SOFTWARERELEASENUMBER "1.2"                                                        // Keep track of release numbers
+#define SOFTWARERELEASENUMBER "1.21"                                                        // Keep track of release numbers
 
 // Included Libraries
 #include "math.h"
@@ -322,11 +323,10 @@ void loop()
     }
     break;
 
-
   case NAPPING_STATE: { // This state puts the device to sleep mode
       if (sysStatus.verboseMode && oldState != state) publishStateTransition();                    // If verboseMode is on and state is changed, Then publish the state transition.
       if (sysStatus.connectedStatus) disconnectFromParticle();          // Disconnect cleanly from Particle
-      stayAwake = 1000;                                                 // Once we come into this function, we need to reset stayAwake as it changes at the top of the hour
+      stayAwake = 1000;                                                 // Once we come into this function, we nee  d to reset stayAwake as it changes at the top of the hour
       int wakeInSeconds = constrain(wakeBoundary - Time.now() % wakeBoundary, 1, wakeBoundary);
       config.mode(SystemSleepMode::ULTRA_LOW_POWER)
       .gpio(userSwitch,CHANGE)
@@ -406,7 +406,7 @@ void petWatchdog()
 
 void sendEvent()
 {
-  char data[128];                   
+  char data[256];                   
   snprintf(data, sizeof(data), "{\"temperature\":%4.1f,  \"humidity\":%4.1f,  \"Soilmoisture\":%i,  \"Soilmoisture2\":%i,  \"lux\":%4.1f,  \"white\":%4.1f,  \"als\":%4.1f,\"battery\":%i}", sensor_data.temperatureInC, sensor_data.relativeHumidity,sensor_data.soilMoisture, sensor_data.soilMoisture2 ,sensor_data.lux,sensor_data.white,sensor_data.raw_als,sensor_data.stateOfCharge);
   publishQueue.publish("environmental-hook", data, PRIVATE);
   dataInFlight = true;                                                                      // set the data inflight flag
