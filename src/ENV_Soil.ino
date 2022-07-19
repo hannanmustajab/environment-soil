@@ -6,19 +6,17 @@
           Adafruit VEML7700 Light Sensor
           MB85RC64 FRAM 
           MCP79410 Real time clock 
+          Soil Moisture sensor.
       * Solar Powered with USB Solar Panel.
       * Reporting Frequency 15 Minutes ( If low power, frequency = 30 minutes.)
       * Pinouts : 
           Watchdog : D8 and D5
 
 * Author: Abdul Hannan Mustajab
-* Sponsor: Thom Harvey ID&D
-* Date: 12 October 2020
+* Latest Revision: 19th July 2022
 */
 
-/*
- 
-*/
+
 
 // v1.00- ENV Code as starting point. 
 // v1.01 - Added soil moisture sensor
@@ -92,7 +90,7 @@ MB85RC64 fram(Wire, 0);                                                         
 MCP79410 rtc;                                                                               // Rickkas MCP79410 libarary
 retained uint8_t publishQueueRetainedBuffer[2048];                                          // Create a buffer in FRAM for cached publishes
 PublishQueueAsync publishQueue(publishQueueRetainedBuffer, sizeof(publishQueueRetainedBuffer));
-// Timer keepAliveTimer(1000, keepAliveMessage);
+Timer keepAliveTimer(1000, keepAliveMessage);
 
 // State Machine Variables
 enum State { INITIALIZATION_STATE, ERROR_STATE, IDLE_STATE, MEASURING_STATE, REPORTING_STATE, RESP_WAIT_STATE,NAPPING_STATE,SLEEPING_STATE};
@@ -242,7 +240,7 @@ void setup()                                                                    
   if (sysStatus.thirdPartySim) {
     waitUntil(Particle.connected); 
     Particle.keepAlive(sysStatus.keepAlive);                                                    // Set the keep alive value
-    // keepAliveTimer.changePeriod(sysStatus.keepAlive*1000);                                  // Will start the repeating timer
+    keepAliveTimer.changePeriod(sysStatus.keepAlive*1000);                                  // Will start the repeating timer
   }
   
   if (!digitalRead(userSwitch)) loadSystemDefaults();                                       // Make sure the device wakes up and connects
@@ -538,7 +536,7 @@ int setThirdPartySim(String command) // Function to force sending data in curren
   {
     sysStatus.thirdPartySim = true;
     Particle.keepAlive(sysStatus.keepAlive);                                                // Set the keep alive value
-    // keepAliveTimer.changePeriod(sysStatus.keepAlive*1000);                                  // Will start the repeating timer
+    keepAliveTimer.changePeriod(sysStatus.keepAlive*1000);                                  // Will start the repeating timer
     if (Particle.connected()) publishQueue.publish("Mode","Set to 3rd Party Sim", PRIVATE);
     systemStatusWriteNeeded = true;
     return 1;
@@ -620,6 +618,10 @@ void keepAliveMessage() {
   publishQueue.publish("*", PRIVATE,NO_ACK);
 }
 
+/*
+
+*/
+
 
 bool connectToParticle() {
   Cellular.on();
@@ -653,3 +655,4 @@ bool disconnectFromParticle()                                     // Ensures we 
 bool notConnected() {                                             // Companion function for disconnectFromParticle
   return !Particle.connected();
 }
+
