@@ -394,6 +394,7 @@ void watchdogISR()
 {
   watchdogFlag = true;
 }
+
 void petWatchdog()
 {
   digitalWriteFast(donePin, HIGH);                                        // Pet the watchdog
@@ -462,7 +463,7 @@ bool takeMeasurements() {
     snprintf(ALSString,sizeof(ALSString),"ALS : %4.1f", sensor_data.raw_als);
 
     sensor_data.stateOfCharge = int(System.batteryCharge());
-    snprintf(batteryString, sizeof(batteryString), "%i %%", sensor_data.stateOfCharge);
+    snprintf(batteryString, sizeof(batteryString), "%i %", sensor_data.stateOfCharge);
    
     getBatteryContext();                   // Check what the battery is doing.
 

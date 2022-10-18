@@ -12,19 +12,17 @@
           Adafruit VEML7700 Light Sensor
           MB85RC64 FRAM 
           MCP79410 Real time clock 
+          Soil Moisture sensor.
       * Solar Powered with USB Solar Panel.
       * Reporting Frequency 15 Minutes ( If low power, frequency = 30 minutes.)
       * Pinouts : 
           Watchdog : D8 and D5
 
 * Author: Abdul Hannan Mustajab
-* Sponsor: Thom Harvey ID&D
-* Date: 12 October 2020
+* Latest Revision: 19th July 2022
 */
 
-/*
- 
-*/
+
 
 // v1.00- ENV Code as starting point. 
 // v1.01 - Added soil moisture sensor
@@ -53,7 +51,7 @@ void keepAliveMessage();
 bool connectToParticle();
 bool disconnectFromParticle();
 bool notConnected();
-#line 30 "/Users/abdulhannanmustajab/Desktop/IoT/GLE_Chili_Dryer/Env-soil/ENV_Soil/src/ENV_Soil.ino"
+#line 28 "/Users/abdulhannanmustajab/Desktop/IoT/GLE_Chili_Dryer/Env-soil/ENV_Soil/src/ENV_Soil.ino"
 #define SOFTWARERELEASENUMBER "1.21"                                                        // Keep track of release numbers
 
 // Included Libraries
@@ -119,7 +117,7 @@ MB85RC64 fram(Wire, 0);                                                         
 MCP79410 rtc;                                                                               // Rickkas MCP79410 libarary
 retained uint8_t publishQueueRetainedBuffer[2048];                                          // Create a buffer in FRAM for cached publishes
 PublishQueueAsync publishQueue(publishQueueRetainedBuffer, sizeof(publishQueueRetainedBuffer));
-// Timer keepAliveTimer(1000, keepAliveMessage);
+Timer keepAliveTimer(1000, keepAliveMessage);
 
 // State Machine Variables
 enum State { INITIALIZATION_STATE, ERROR_STATE, IDLE_STATE, MEASURING_STATE, REPORTING_STATE, RESP_WAIT_STATE,NAPPING_STATE,SLEEPING_STATE};
@@ -269,7 +267,7 @@ void setup()                                                                    
   if (sysStatus.thirdPartySim) {
     waitUntil(Particle.connected); 
     Particle.keepAlive(sysStatus.keepAlive);                                                    // Set the keep alive value
-    // keepAliveTimer.changePeriod(sysStatus.keepAlive*1000);                                  // Will start the repeating timer
+    keepAliveTimer.changePeriod(sysStatus.keepAlive*1000);                                  // Will start the repeating timer
   }
   
   if (!digitalRead(userSwitch)) loadSystemDefaults();                                       // Make sure the device wakes up and connects
@@ -423,6 +421,7 @@ void watchdogISR()
 {
   watchdogFlag = true;
 }
+
 void petWatchdog()
 {
   digitalWriteFast(donePin, HIGH);                                        // Pet the watchdog
@@ -491,7 +490,7 @@ bool takeMeasurements() {
     snprintf(ALSString,sizeof(ALSString),"ALS : %4.1f", sensor_data.raw_als);
 
     sensor_data.stateOfCharge = int(System.batteryCharge());
-    snprintf(batteryString, sizeof(batteryString), "%i %%", sensor_data.stateOfCharge);
+    snprintf(batteryString, sizeof(batteryString), "%i %", sensor_data.stateOfCharge);
    
     getBatteryContext();                   // Check what the battery is doing.
 
@@ -565,7 +564,7 @@ int setThirdPartySim(String command) // Function to force sending data in curren
   {
     sysStatus.thirdPartySim = true;
     Particle.keepAlive(sysStatus.keepAlive);                                                // Set the keep alive value
-    // keepAliveTimer.changePeriod(sysStatus.keepAlive*1000);                                  // Will start the repeating timer
+    keepAliveTimer.changePeriod(sysStatus.keepAlive*1000);                                  // Will start the repeating timer
     if (Particle.connected()) publishQueue.publish("Mode","Set to 3rd Party Sim", PRIVATE);
     systemStatusWriteNeeded = true;
     return 1;
