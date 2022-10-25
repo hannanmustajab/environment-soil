@@ -50,6 +50,7 @@
 // v1.01 - Added soil moisture sensor
 // v1.20 - Added second soil moisture sensor to the board. 
 // v1.21 - Fixed issue with the size of the data payload. 
+// v2.00 - Added publishQueuePosix, new connecting state and fixed low battery issue.
 
 
 
@@ -84,8 +85,8 @@ void outOfMemoryHandler(system_event_t event, int param);
 void  recordConnectionDetails();
 void userSwitchISR();
 bool meterParticlePublish();
-#line 55 "/Users/abdulhannanmustajab/Desktop/IoT/GLE_Chili_Dryer/Env-soil/ENV_Soil/src/ENV_Soil.ino"
-#define SOFTWARERELEASENUMBER "1.21"                // Keep track of release numbers
+#line 56 "/Users/abdulhannanmustajab/Desktop/IoT/GLE_Chili_Dryer/Env-soil/ENV_Soil/src/ENV_Soil.ino"
+#define SOFTWARERELEASENUMBER "2.20"                // Keep track of release numbers
 
 // Included Libraries
 #include "math.h"
@@ -95,7 +96,6 @@ bool meterParticlePublish();
 #include "PublishQueuePosixRK.h"                     // Async Particle Publish
 #include "MB85RC256V-FRAM-RK.h"                      // Rickkas Particle based FRAM Library
 #include "MCP79410RK.h"   
-#include "AB1805_RK.h"
 
 
 // Define the memory map - note can be EEPROM or FRAM - moving to FRAM for speed and to avoid memory wear
@@ -107,7 +107,7 @@ namespace FRAM {                                                                
    };
 };
 
-const int FRAMversionNumber = 5;                                                            // Increment this number each time the memory map is changed
+const int FRAMversionNumber = 6;                                                            // Increment this number each time the memory map is changed
 
 struct systemStatus_structure {                     
   uint8_t structuresVersion;                        // Version of the data structures (system and data)
@@ -180,9 +180,8 @@ SystemSleepConfiguration config;                    // Initialize new Sleep 2.0 
 Adafruit_VEML7700 veml;
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 MB85RC64 fram(Wire, 0);                                                                     // Rickkas' FRAM library
-// MCP79410 rtc;                                                                               // Rickkas MCP79410 libarary
+MCP79410 rtc;                                                                               // Rickkas MCP79410 libarary
 Timer keepAliveTimer(1000, keepAliveMessage);
-AB1805 ab1805(Wire);                                // Rickkas' RTC / Watchdog library
 FuelGauge fuelGauge;                                // Needed to address issue with updates in low battery state
 
 // State Machine Variables
@@ -195,7 +194,7 @@ volatile bool watchdogFlag=false;                                               
 
 
 // Timing Variables
-int wakeBoundary = 1*3600 + 0*60 + 0;               // Sets a reporting frequency of 1 hour 0 minutes 0 seconds
+int wakeBoundary = 0*3600 + 10*60 + 0;               // Sets a reporting frequency of 1 hour 0 minutes 0 seconds
 const unsigned long stayAwakeLong = 90000;          // In lowPowerMode, how long to stay awake every hour
 const unsigned long webhookWait = 30000;            // How long will we wait for a WebHook response
 const unsigned long resetWait = 30000;              // How long will we wait in ERROR_STATE until reset
@@ -272,7 +271,7 @@ void setup()                                                                    
   Particle.variable("BatteryVoltage", sysStatus.batteryVoltage);
   Particle.variable("lowPowerMode",lowPowerModeStr);
   Particle.variable("Alerts",sensor_data.alerts);
-  
+  Particle.variable("Reporting Duration",String(wakeBoundary));  
   
   Particle.function("Measure-Now",measureNow);
   Particle.function("Verbose-Mode",setVerboseMode);
@@ -282,10 +281,12 @@ void setup()                                                                    
 
   // Particle and System Set up next
   Particle.setDisconnectOptions(CloudDisconnectOptions().graceful(true).timeout(5s));  // Don't disconnect abruptly
+  
 
   // Watchdog Timer and Real Time Clock Initialization
-  ab1805.withFOUT(D8).setup();                                         // The carrier board has D8 connected to FOUT for wake interrupts
-  ab1805.setWDT(AB1805::WATCHDOG_MAX_SECONDS);                         // Enable watchdog
+  rtc.setup();                                                                                       // Start the real time clock
+  rtc.clearAlarm();                                                                                   // Ensures alarm is still not set from last cycle
+
   // Take a look at the battery state of charge - good to do this before turning on the cellular modem
   fuelGauge.wakeup();                                                  // Expliciely wake the Feul gauge and give it a half-sec
   delay(500);
@@ -365,11 +366,13 @@ void setup()                                                                    
   
   takeMeasurements();                                                                       // For the benefit of monitoring the device
   
-  if (sysStatus.lowBatteryMode) setLowPowerMode("1");                                       // If battery is low we need to go to low power state
+  setLowPowerMode("0");
+
+  // if (sysStatus.lowBatteryMode) setLowPowerMode("1");                                       // If battery is low we need to go to low power state
 
   if(sysStatus.verboseMode) PublishQueuePosix::instance().publish("Startup",StartupMessage,PRIVATE);                       // Let Particle know how the startup process went
 
-  if (state == INITIALIZATION_STATE) state = IDLE_STATE;                                    // We made it throughgo let's go to idle
+  if (state == INITIALIZATION_STATE) state = CONNECTING_STATE;                                    // We made it throughgo let's go to idle
 }
 
 void loop()
@@ -379,9 +382,10 @@ void loop()
   
   case IDLE_STATE:                                                     // Where we spend most time - note, the order of these conditionals is important
     if (state != oldState) publishStateTransition();
-    if (sysStatus.lowPowerMode && (millis() - stayAwakeTimeStamp) > stayAwake) state = NAPPING_STATE;         // When in low power mode, we can nap between taps
+    if (sysStatus.lowPowerMode && (millis() - stayAwakeTimeStamp) > stayAwake) state = NAPPING_STATE;     
     if (firmwareUpdateInProgress) state= FIRMWARE_UPDATE;                                                     // This means there is a firemware update on deck
-    if (Time.hour() != Time.hour(lastReportedTime)) state = REPORTING_STATE;                                  // We want to report on the hour but not after bedtime
+    // if (Time.hour() != Time.hour(lastReportedTime)) state = REPORTING_STATE;                                  // We want to report on the hour but not after bedtime
+    if (!(Time.now() % wakeBoundary)) state = REPORTING_STATE;  
     break;
 
    case REPORTING_STATE:                                                // In this state we will publish the hourly totals to the queue and decide whether we should connect
@@ -444,44 +448,19 @@ void loop()
       if (state != oldState) publishStateTransition();
       if (Particle.connected() || !Cellular.isOff()) disconnectFromParticle();           // Disconnect cleanly from Particle and power down the modem
       stayAwake = 1000;                                                  // Once we come into this function, we need to reset stayAwake as it changes at the top of the hour
-      state = IDLE_STATE;                                                // Back to the IDLE_STATE after a nap - not enabling updates here as napping is typicallly disconnected
-      ab1805.stopWDT();                                                  // If we are sleeping, we will miss petting the watchdog
+      // state = IDLE_STATE;                                                // Back to the IDLE_STATE after a nap - not enabling updates here as napping is typicallly disconnected
       int wakeInSeconds = constrain(wakeBoundary - Time.now() % wakeBoundary, 1, wakeBoundary);
       Log.info("Napping for %i seconds",wakeInSeconds);
+      PublishQueuePosix::instance().publish("Napping Duration", String(wakeInSeconds), PRIVATE);      
       config.mode(SystemSleepMode::ULTRA_LOW_POWER)
         .gpio(userSwitch,CHANGE)                                         // User presses the user button
         .duration(wakeInSeconds * 1000);
       SystemSleepResult result = System.sleep(config);                   // Put the device to sleep
-      ab1805.resumeWDT();                                                // Wakey Wakey - WDT can resume
       fuelGauge.wakeup();                                                // Make sure the fuelGauge is woke
       stayAwakeTimeStamp = millis();
       if (result.wakeupPin() == userSwitch) setLowPowerMode("0");        // The user woke the device and we need to make sure it stays awake
+      state = REPORTING_STATE;
     } break;
-
-    case SLEEPING_STATE: {                                               // This state is triggered once the park closes and runs until it opens - Sensor is off and interrupts disconnected
-      if (state != oldState) publishStateTransition();
-      if (Particle.connected() || !Cellular.isOff()) disconnectFromParticle();  // Disconnect cleanly from Particle
-      stayAwake = 1000;                                                  // Once we come into this function, we need to reset stayAwake as it changes at the top of the hour
-      state = IDLE_STATE;                                                // Head back to the idle state after we sleep
-      ab1805.stopWDT();                                                  // No watchdogs interrupting our slumber
-      int wakeInSeconds = constrain(wakeBoundary - Time.now() % wakeBoundary, 1, wakeBoundary) + 1;
-      Log.info("Going to sleep for %i seconds",wakeInSeconds);
-      config.mode(SystemSleepMode::ULTRA_LOW_POWER)
-        .gpio(userSwitch,CHANGE)
-        .duration(wakeInSeconds * 1000);
-      SystemSleepResult result = System.sleep(config);                   // Put the device to sleep device continues operations from here
-      ab1805.resumeWDT();                                                // Wakey Wakey - WDT can resume
-      fuelGauge.wakeup();                                                // Make sure the fuelGauge is woke
-      
-      stayAwakeTimeStamp = millis();
-      if (result.wakeupPin() == userSwitch) {                            // If the user woke the device we need to get up - device was sleeping so we need to reset opening hours
-        setLowPowerMode("0");                                            // We are waking the device for a reason
-        stayAwakeTimeStamp = millis();
-        stayAwake = stayAwakeLong;
-        systemStatusWriteNeeded = true;
-      }
-    } break;
-
 
     case CONNECTING_STATE:{                                              // Will connect - or not and head back to the Idle state
       static State retainedOldState;                                     // Keep track for where to go next (depends on whether we were called from Reporting)
@@ -547,7 +526,7 @@ void loop()
 
       switch (sensor_data.alerts) {                                        // All of these events will reset the device
         case 12:                                                       // This is an initialization error - likely FRAM - need to power cycle to clear
-          ab1805.deepPowerDown();                                      // 30 second power cycle of Boron including cellular modem, carrier board and all peripherals
+          System.reset();                                    // 30 second power cycle of Boron including cellular modem, carrier board and all peripherals
           break;
 
         case 30 ... 31:                                                // Device failed to connect too many times
@@ -561,7 +540,7 @@ void loop()
           sysStatus.resetCount = 0;                                    // Reset so we don't do this too often
           fram.put(FRAM::sysStatusAddr,sysStatus);                  // Won't get back to the main loop
           delay (100);
-          ab1805.deepPowerDown();                                      // 30 second power cycle of Boron including cellular modem, carrier board and all peripherals
+          // ab1805.deepPowerDown();                                      // 30 second power cycle of Boron including cellular modem, carrier board and all peripherals
           break;
 
         case 14:                                                       // This is an out of memory error
@@ -609,7 +588,7 @@ void loop()
   
   PublishQueuePosix::instance().loop();                                // Check to see if we need to tend to the message queue
   
-  ab1805.loop();                                                       // Keeps the RTC synchronized with the Boron's clock
+  rtc.loop();                   // keeps the clock up to date
 
    if (outOfMemory >= 0) {                                              // In this function we are going to reset the system if there is an out of memory error
     sensor_data.alerts = 14;                                               // Out of memory alert
@@ -641,7 +620,7 @@ void loadSystemDefaults() {                                           // Default
   }
   Log.info("Loading system defaults");
   sysStatus.structuresVersion = 1;
-  sysStatus.verboseMode = false;
+  sysStatus.verboseMode = true;
   sysStatus.lowBatteryMode = false;
   if (digitalRead(userSwitch)) setLowPowerMode("1");                  // Low power mode or not depending on user switch
   else setLowPowerMode("0");
